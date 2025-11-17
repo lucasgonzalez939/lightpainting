@@ -1,0 +1,482 @@
+<!DOCTYPE html>
+<html lang="es" class="h-full bg-gray-900">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Pintura de Luz con Webcam</title>
+    <!-- Load Tailwind CSS --><script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        /* Ensure canvas is crisp on all displays */
+        canvas {
+            image-rendering: -moz-crisp-edges;
+            image-rendering: -webkit-crisp-edges;
+            image-rendering: pixelated;
+            image-rendering: crisp-edges;
+        }
+
+        /* Full viewport for body and root html */
+        html, body {
+            height: 100%;
+            overflow: hidden; /* Prevent scrollbars */
+        }
+        
+        body {
+            margin: 0;
+            padding: 0;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center; /* Center content vertically too if not full screen */
+            background-color: #1a202c; /* Dark background */
+            color: #E2E8F0; /* Light text */
+        }
+
+        /* Container for canvases to fill the screen */
+        #canvas-container {
+            position: fixed; /* Fixed position to cover the viewport */
+            top: 0;
+            left: 0;
+            width: 100vw; /* Viewport width */
+            height: 100vh; /* Viewport height */
+            background-color: black;
+            overflow: hidden;
+            z-index: 0; /* Ensure it's behind controls */
+        }
+
+        /* Overlay controls */
+        #controls {
+            position: fixed; /* Fixed position */
+            bottom: 1rem; /* 4 units from bottom */
+            left: 50%; /* Center horizontally */
+            transform: translateX(-50%); /* Adjust for true centering */
+            z-index: 10; /* Ensure controls are on top */
+            padding: 0.5rem 1rem; /* Padding around buttons */
+            border-radius: 0.5rem;
+            background-color: rgba(0, 0, 0, 0.7); /* Slightly transparent dark background */
+            backdrop-filter: blur(5px); /* Frosted glass effect */
+            -webkit-backdrop-filter: blur(5px); /* For Safari */
+        }
+
+        #controls button {
+            @apply px-4 py-2 text-sm rounded-lg font-medium transition-colors;
+            background-color: rgba(75, 85, 99, 0.7); /* Transparent gray */
+            color: white;
+        }
+
+        #controls button:hover {
+            background-color: rgba(75, 85, 99, 0.9); /* Less transparent on hover */
+        }
+        
+        /* Specific button colors */
+        #resetButton { @apply bg-gray-600; }
+        #toggleLiveButton { @apply bg-blue-600; }
+        #snapshotButton { @apply bg-green-600; }
+        #startRecordButton { @apply bg-red-600; }
+        #stopRecordButton { @apply bg-red-800; }
+
+        /* Settings controls inline */
+        .settings-group {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            padding: 0 0.5rem;
+            border-left: 1px solid rgba(255, 255, 255, 0.2);
+        }
+
+        .settings-group label {
+            font-size: 0.65rem;
+            font-weight: 500;
+            opacity: 0.7;
+            margin-bottom: 0.25rem;
+            white-space: nowrap;
+        }
+
+        .settings-group input[type="range"] {
+            width: 80px;
+            height: 3px;
+            border-radius: 2px;
+            background: rgba(255, 255, 255, 0.2);
+            outline: none;
+        }
+
+        .settings-group input[type="range"]::-webkit-slider-thumb {
+            -webkit-appearance: none;
+            appearance: none;
+            width: 10px;
+            height: 10px;
+            border-radius: 50%;
+            background: #3b82f6;
+            cursor: pointer;
+        }
+
+        .settings-group input[type="range"]::-moz-range-thumb {
+            width: 10px;
+            height: 10px;
+            border-radius: 50%;
+            background: #3b82f6;
+            cursor: pointer;
+            border: none;
+        }
+
+        .settings-group .value-display {
+            font-size: 0.6rem;
+            opacity: 0.5;
+        }
+
+        /* Loading indicator styling */
+        #loading {
+            position: absolute;
+            inset: 0;
+            display: flex;
+            flex-direction: column; /* Stack text and button */
+            align-items: center;
+            justify-content: center;
+            gap: 1rem; /* Space between text and button */
+            background-color: rgba(0, 0, 0, 0.75);
+            color: white;
+            font-size: 1.25rem;
+            z-index: 20; /* Ensure it's on top of everything */
+        }
+    </style>
+</head>
+<body>
+
+    <div id="canvas-container">
+        <!-- 1. The VISIBLE canvas shown to the user --><canvas id="compositeCanvas" class="absolute inset-0 w-full h-full object-cover"></canvas>
+        
+        <!-- 2. The HIDDEN canvas for the live video feed --><canvas id="liveViewCanvas" class="hidden"></canvas>
+
+        <!-- 3. The HIDDEN canvas for the painting trails --><canvas id="paintingCanvas" class="hidden"></canvas>
+        
+        <!-- 4. The HIDDEN video element to receive the webcam stream --><video id="video" playsinline autoplay muted class="hidden"></video>
+        
+        <!-- Loading Indicator -->
+        <div id="loading">
+            <p>Haz clic para iniciar la cámara</p>
+            <button id="startButton" class="bg-blue-600 hover:bg-blue-500 px-4 py-2 text-lg rounded-lg font-medium transition-colors">
+                Iniciar Cámara
+            </button>
+        </div>
+    </div>
+
+    <!-- Control Panel -->
+    <div id="controls" class="flex justify-center items-center gap-3">
+        <button id="resetButton" class="bg-gray-600 hover:bg-gray-500">Reiniciar Pintura</button>
+        <button id="toggleLiveButton" class="bg-blue-600 hover:bg-blue-500">Ocultar Vista en Vivo</button>
+        <button id="snapshotButton" class="bg-green-600 hover:bg-green-500">Capturar Instantánea</button>
+        <button id="startRecordButton" class="bg-red-600 hover:bg-red-500">Iniciar Grabación</button>
+        <button id="stopRecordButton" class="bg-red-800 hover:bg-red-700 hidden">Detener Grabación</button>
+        
+        <!-- Inline Settings -->
+        <div class="settings-group">
+            <label>
+                Decay <span class="value-display" id="decayValue">0.95</span>
+            </label>
+            <input type="range" id="decaySlider" min="80" max="99" value="95" step="1">
+        </div>
+        <div class="settings-group">
+            <label>
+                Threshold <span class="value-display" id="thresholdValue">30</span>
+            </label>
+            <input type="range" id="thresholdSlider" min="10" max="100" value="30" step="5">
+        </div>
+    </div>
+
+    <script>
+        // --- Configuration ---
+        // How fast the light fades (0.0 - 1.0). 1.0 = no fade. 0.95 = slow fade.
+        let DECAY_RATE = 0.95; 
+        // Only pixels with a brightness (0-255) ABOVE this value will be painted.
+        let BRIGHTNESS_THRESHOLD = 30;
+        // Try to get 1080p, fallback to 720p, then VGA
+        const VIDEO_CONSTRAINTS = {
+            width: { ideal: 1920, max: 1920 },
+            height: { ideal: 1080, max: 1080 }
+        };
+        // --- End Configuration ---
+
+        // Get all DOM elements
+        const video = document.getElementById('video');
+        const loading = document.getElementById('loading');
+        const startButton = document.getElementById('startButton'); // Added
+        
+        // The visible canvas
+        const compositeCanvas = document.getElementById('compositeCanvas');
+        const compositeCtx = compositeCanvas.getContext('2d', { willReadFrequently: true });
+        
+        // The hidden canvases
+        const liveViewCanvas = document.getElementById('liveViewCanvas');
+        const liveViewCtx = liveViewCanvas.getContext('2d', { willReadFrequently: true });
+        
+        const paintingCanvas = document.getElementById('paintingCanvas');
+        const paintingCtx = paintingCanvas.getContext('2d', { willReadFrequently: true });
+
+        // Control buttons
+        const resetButton = document.getElementById('resetButton');
+        const toggleLiveButton = document.getElementById('toggleLiveButton');
+        const snapshotButton = document.getElementById('snapshotButton');
+        const startRecordButton = document.getElementById('startRecordButton');
+        const stopRecordButton = document.getElementById('stopRecordButton');
+
+        // Settings controls
+        const decaySlider = document.getElementById('decaySlider');
+        const decayValue = document.getElementById('decayValue');
+        const thresholdSlider = document.getElementById('thresholdSlider');
+        const thresholdValue = document.getElementById('thresholdValue');
+
+        // State variables
+        let width, height;
+        let isPainting = false;
+        let isLiveViewVisible = true;
+        let mediaRecorder;
+        let recordedChunks = [];
+
+        // --- Core Functions ---
+
+        /**
+         * Tries to start the webcam stream with the given constraints.
+         */
+        async function setupWebcam() {
+            try {
+                const stream = await navigator.mediaDevices.getUserMedia({ video: VIDEO_CONSTRAINTS, audio: false });
+                video.srcObject = stream;
+                video.addEventListener('playing', startPainting); // Changed from 'loadedmetadata'
+                video.play(); // Explicitly call play
+            } catch (err) {
+                console.error("Error al acceder a la cámara web:", err);
+                // Update loading text to show the error
+                const loadingText = loading.querySelector('p');
+                if (loadingText) {
+                    loadingText.innerText = "Error: Permiso de cámara denegado.";
+                }
+                // Re-show the start button if it was hidden
+                startButton.style.display = 'block';
+
+                // Fallback to 720p
+                try {
+                    const stream = await navigator.mediaDevices.getUserMedia({ video: { width: 1280, height: 720 }, audio: false });
+                    video.srcObject = stream;
+                    video.addEventListener('playing', startPainting); // Changed from 'loadedmetadata'
+                    video.play(); // Explicitly call play
+                    console.warn("Se utilizó una resolución de cámara web de 720p como alternativa.");
+                } catch (err2) {
+                    console.error("Error al acceder a la cámara web (alternativa 720p fallida):", err2);
+                    if (loadingText) {
+                        loadingText.innerText = "Error: Permiso de cámara denegado.";
+                    }
+                    startButton.style.display = 'block';
+                }
+            }
+        }
+
+        /**
+         * Called once the video stream is ready.
+         * Sets up all canvases to match the video dimensions and starts the main loop.
+         */
+        function startPainting() {
+            // Get dimensions from the video stream
+            width = video.videoWidth;
+            height = video.videoHeight;
+            
+            // Set all canvas dimensions to match the video
+            compositeCanvas.width = width;
+            compositeCanvas.height = height;
+            liveViewCanvas.width = width;
+            liveViewCanvas.height = height;
+            paintingCanvas.width = width;
+            paintingCanvas.height = height;
+
+            // Set initial styles for painting
+            paintingCtx.fillStyle = '#000';
+            paintingCtx.fillRect(0, 0, width, height);
+            
+            // Hide loading message
+            loading.style.display = 'none';
+            isPainting = true;
+            
+            // Start the main rendering loop
+            paintLoop();
+        }
+
+        /**
+         * The main rendering loop, called every frame.
+         */
+        function paintLoop() {
+            if (!isPainting) return;
+
+            // 1. FADE: Apply the decay to the painting canvas
+            paintingCtx.globalCompositeOperation = 'source-over'; // Default blend mode
+            paintingCtx.globalAlpha = DECAY_RATE;
+            // This trick draws the canvas onto itself, but slightly faded
+            paintingCtx.drawImage(paintingCanvas, 0, 0, width, height);
+            paintingCtx.globalAlpha = 1.0; // Reset alpha
+
+            // 2. PAINT: Add new bright pixels from the video
+            
+            // Draw the current video frame to the hidden live view canvas
+            liveViewCtx.save(); // 1. Guardar estado
+            liveViewCtx.translate(width, 0); // 2. Mover a la derecha
+            liveViewCtx.scale(-1, 1); // 3. Voltear horizontalmente
+            liveViewCtx.drawImage(video, 0, 0, width, height);
+            liveViewCtx.restore(); // 4. Restaurar estado
+
+            // Get the pixel data from the live video
+            let frameData = liveViewCtx.getImageData(0, 0, width, height);
+            let data = frameData.data;
+
+            // Apply threshold: Make dim pixels transparent
+            for (let i = 0; i < data.length; i += 4) {
+                let r = data[i];
+                let g = data[i + 1];
+                let b = data[i + 2];
+                // Simple brightness calculation
+                let brightness = (r + g + b) / 3;
+                
+                if (brightness < BRIGHTNESS_THRESHOLD) {
+                    data[i + 3] = 0; // Set alpha to 0 (transparent)
+                }
+            }
+            // Put the thresholded (semi-transparent) frame back
+            liveViewCtx.putImageData(frameData, 0, 0);
+
+            // Use 'lighter' blend mode to add the new light (full color)
+            paintingCtx.globalCompositeOperation = 'lighter';
+            paintingCtx.drawImage(liveViewCanvas, 0, 0, width, height);
+
+            // 3. COMPOSE: Draw the final image to the visible canvas
+            compositeCtx.globalCompositeOperation = 'source-over';
+            compositeCtx.clearRect(0, 0, width, height); // Clear visible canvas
+            
+            if (isLiveViewVisible) {
+                // Draw the live video feed as the bottom layer
+                compositeCtx.save(); // 1. Guardar estado
+                compositeCtx.translate(width, 0); // 2. Mover a la derecha
+                compositeCtx.scale(-1, 1); // 3. Voltear horizontalmente
+                compositeCtx.drawImage(video, 0, 0, width, height);
+                compositeCtx.restore(); // 4. Restaurar estado
+            }
+            
+            // Draw the painting (with faded trails) on top
+            compositeCtx.drawImage(paintingCanvas, 0, 0, width, height);
+
+            // Request the next frame
+            requestAnimationFrame(paintLoop);
+        }
+        
+        /**
+         * Downloads the current canvas content as a PNG.
+         */
+        function takeSnapshot() {
+            const link = document.createElement('a');
+            link.download = `pintura-luz-${new Date().toISOString()}.png`;
+            // We take the image from the composite canvas, which has both layers
+            link.href = compositeCanvas.toDataURL('image/png');
+            link.click();
+        }
+
+        /**
+         * Starts recording the composite canvas.
+         */
+        function startRecording() {
+            recordedChunks = [];
+            // Get a stream from the visible canvas
+            const stream = compositeCanvas.captureStream(30); // 30 fps
+            
+            mediaRecorder = new MediaRecorder(stream, { mimeType: 'video/webm' });
+
+            mediaRecorder.ondataavailable = (event) => {
+                if (event.data.size > 0) {
+                    recordedChunks.push(event.data);
+                }
+            };
+
+            mediaRecorder.onstop = () => {
+                const blob = new Blob(recordedChunks, { type: 'video/webm' });
+                const url = URL.createObjectURL(blob);
+                const link = document.createElement('a');
+                link.download = `grabacion-luz-${new Date().toISOString()}.webm`;
+                link.href = url;
+                link.click();
+                URL.revokeObjectURL(url);
+            };
+
+            mediaRecorder.start();
+            
+            // Update UI
+            startRecordButton.style.display = 'none';
+            stopRecordButton.style.display = 'inline-block';
+        }
+
+        /**
+         * Stops the recording and triggers the download.
+         */
+        function stopRecording() {
+            if (mediaRecorder) {
+                mediaRecorder.stop();
+            }
+            
+            // Update UI
+            startRecordButton.style.display = 'inline-block';
+            stopRecordButton.style.display = 'none';
+        }
+
+        // --- Event Listeners ---
+
+        // START BUTTON: Added this listener
+        startButton.addEventListener('click', () => {
+            // Update UI to show we're trying
+            const loadingText = loading.querySelector('p');
+            if (loadingText) {
+                loadingText.innerText = 'Iniciando cámara web...';
+            }
+            startButton.style.display = 'none';
+            
+            // Now, try to setup the webcam
+            setupWebcam();
+        });
+
+        // Reset: Clear the painting canvas
+        resetButton.addEventListener('click', () => {
+            paintingCtx.globalCompositeOperation = 'source-over';
+            paintingCtx.fillStyle = '#000';
+            paintingCtx.fillRect(0, 0, width, height);
+            console.log('Lienzo reiniciado');
+        });
+
+        // Toggle Live View: Show/hide the base video layer
+        toggleLiveButton.addEventListener('click', () => {
+            isLiveViewVisible = !isLiveViewVisible;
+            toggleLiveButton.innerText = isLiveViewVisible ? 'Ocultar Vista en Vivo' : 'Mostrar Vista en Vivo';
+            // Toggle button colors for visual feedback
+            toggleLiveButton.classList.toggle('bg-blue-600');
+            toggleLiveButton.classList.toggle('hover:bg-blue-500');
+            toggleLiveButton.classList.toggle('bg-gray-600');
+            toggleLiveButton.classList.toggle('hover:bg-gray-500');
+            console.log(`Vista en vivo: ${isLiveViewVisible ? 'visible' : 'oculta'}`);
+        });
+
+        // Snapshot button
+        snapshotButton.addEventListener('click', takeSnapshot);
+
+        // Record buttons
+        startRecordButton.addEventListener('click', startRecording);
+        stopRecordButton.addEventListener('click', stopRecording);
+
+        // Settings sliders
+        decaySlider.addEventListener('input', (e) => {
+            DECAY_RATE = e.target.value / 100;
+            decayValue.textContent = DECAY_RATE.toFixed(2);
+        });
+
+        thresholdSlider.addEventListener('input', (e) => {
+            BRIGHTNESS_THRESHOLD = parseInt(e.target.value);
+            thresholdValue.textContent = BRIGHTNESS_THRESHOLD;
+        });
+
+        // --- Start the application ---
+        // We no longer start automatically. The user must click the button.
+        // setupWebcam(); // REMOVED
+        
+    </script>
+</body>
+</html>
